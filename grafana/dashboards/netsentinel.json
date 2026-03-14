@@ -1,0 +1,82 @@
+{
+  "uid": "netsentinel",
+  "title": "NetSentinel WAF",
+  "tags": ["netsentinel"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "15s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1, "title": "Total Attacks Detected", "type": "stat",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "netsentinel_attacks_total", "legendFormat": "attacks" }],
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 10 }, { "color": "red", "value": 100 }] } } }
+    },
+    {
+      "id": 2, "title": "Requests Blocked", "type": "stat",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "netsentinel_requests_blocked_total", "legendFormat": "blocked" }],
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } } }
+    },
+    {
+      "id": 3, "title": "IPs Blocked", "type": "stat",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "netsentinel_ips_blocked_total", "legendFormat": "ips" }],
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } } }
+    },
+    {
+      "id": 4, "title": "Anomalies Detected", "type": "stat",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "netsentinel_anomalies_detected_total", "legendFormat": "anomalies" }],
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } } }
+    },
+    {
+      "id": 5, "title": "Request Rate", "type": "timeseries",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "rate(netsentinel_requests_total[1m])", "legendFormat": "requests/s" },
+        { "expr": "rate(netsentinel_requests_blocked_total[1m])", "legendFormat": "blocked/s" }
+      ]
+    },
+    {
+      "id": 6, "title": "Attack Rate by Category", "type": "timeseries",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "rate(netsentinel_attacks_total[1m])", "legendFormat": "{{category}}" }
+      ]
+    },
+    {
+      "id": 7, "title": "Request Duration Percentiles", "type": "timeseries",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "histogram_quantile(0.99, rate(netsentinel_request_duration_seconds_bucket[1m]))", "legendFormat": "p99" },
+        { "expr": "histogram_quantile(0.95, rate(netsentinel_request_duration_seconds_bucket[1m]))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.50, rate(netsentinel_request_duration_seconds_bucket[1m]))", "legendFormat": "p50" }
+      ]
+    },
+    {
+      "id": 8, "title": "Attacks by Severity", "type": "timeseries",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "rate(netsentinel_attacks_total{severity=\"CRITICAL\"}[1m])", "legendFormat": "CRITICAL" },
+        { "expr": "rate(netsentinel_attacks_total{severity=\"HIGH\"}[1m])", "legendFormat": "HIGH" },
+        { "expr": "rate(netsentinel_attacks_total{severity=\"MEDIUM\"}[1m])", "legendFormat": "MEDIUM" },
+        { "expr": "rate(netsentinel_attacks_total{severity=\"LOW\"}[1m])", "legendFormat": "LOW" }
+      ]
+    }
+  ]
+}
