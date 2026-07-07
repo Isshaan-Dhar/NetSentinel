@@ -72,12 +72,13 @@ func collectRequestTargets(r *http.Request) []string {
 		}
 	}
 
-	// SECURITY FIX: Do not rely on r.ContentLength > 0, which fails on Chunked Transfer-Encoding.
-	// We read unconditionally if a body exists, capped at 1MB to prevent memory exhaustion.
+	// SECURITY & INTEGRITY FIX: Read unconditionally if a body exists, capped at 1MB.
+	// Use io.MultiReader to reconstruct the original stream so large file uploads 
+	// are not silently truncated and corrupted before reaching the backend.
 	if r.Body != nil && r.Body != http.NoBody {
 		bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err == nil {
-			r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+			r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(bodyBytes), r.Body))
 			targets = append(targets, string(bodyBytes))
 		}
 	}
