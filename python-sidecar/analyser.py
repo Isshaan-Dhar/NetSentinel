@@ -4,7 +4,7 @@ import logging
 import schedule
 import time
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime
 from dotenv import load_dotenv
 import psycopg2
 import psycopg2.extras
@@ -38,11 +38,12 @@ def get_connection():
 
 def fetch_window(conn) -> list[dict]:
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        # Fixed parameter syntax conflict by computing mathematical intervals safely outside quotes
         cur.execute(
             """
             SELECT client_ip, method, path, user_agent, status_code, duration_ms, blocked, occurred_at
             FROM request_stats
-            WHERE occurred_at >= NOW() - INTERVAL '%s seconds'
+            WHERE occurred_at >= NOW() - (INTERVAL '1 second' * %s)
             ORDER BY occurred_at ASC
             """,
             (ANALYSIS_WINDOW,)
@@ -52,11 +53,12 @@ def fetch_window(conn) -> list[dict]:
 
 def fetch_attacks(conn) -> list[dict]:
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        # Fixed parameter syntax conflict by computing mathematical intervals safely outside quotes
         cur.execute(
             """
             SELECT client_ip, category, severity
             FROM attack_log
-            WHERE occurred_at >= NOW() - INTERVAL '%s seconds'
+            WHERE occurred_at >= NOW() - (INTERVAL '1 second' * %s)
             """,
             (ANALYSIS_WINDOW,)
         )
@@ -71,13 +73,13 @@ def ua_entropy(agents: list[str]) -> float:
     return -sum((agents.count(u) / total) * math.log2(agents.count(u) / total) for u in unique)
 
 
-def build_features(requests: list[dict], attacks: list[dict]) -> dict[str, list]:
+def build_features(requests_list: list[dict], attacks_list: list[dict]) -> dict[str, list]:
     ip_requests = defaultdict(list)
-    for r in requests:
+    for r in requests_list:
         ip_requests[r["client_ip"]].append(r)
 
     ip_attacks = defaultdict(list)
-    for a in attacks:
+    for a in attacks_list:
         ip_attacks[a["client_ip"]].append(a)
 
     features = {}
@@ -104,8 +106,7 @@ def build_features(requests: list[dict], attacks: list[dict]) -> dict[str, list]
 
 def notify_proxy(alert: AnomalyAlert):
     try:
-        requests_mod = requests
-        requests_mod.post(
+        requests.post(
             PROXY_URL,
             json={"anomaly_type": alert.anomaly_type, "severity": alert.severity},
             timeout=2,
