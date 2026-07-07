@@ -21,7 +21,7 @@ func Load() *Config {
 		RedisAddr:      getEnv("REDIS_ADDR", "redis:6379"),
 		WAFMode:        getEnv("WAF_MODE", "block"),
 		UpstreamURL:    getEnv("UPSTREAM_URL", "http://test-backend:9000"),
-		InternalSecret: getEnv("INTERNAL_API_SECRET", "default-secret"), // SECURITY FIX: Add configurable internal secret
+		InternalSecret: getEnv("INTERNAL_API_SECRET", "default-secret"),
 	}
 }
 
