@@ -62,8 +62,6 @@ func NewProxyHandler(upstream string, store *db.Store, redis *redisstore.Store, 
 			return err
 		}
 
-		// CRITICAL FIX: Reconstruct the response stream using MultiReader to prevent 
-		// corrupting or truncating large downstream JSON payloads or text files.
 		resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(bodyBytes), resp.Body))
 
 		result := engine.InspectResponse(bodyBytes)
@@ -81,15 +79,13 @@ func NewProxyHandler(upstream string, store *db.Store, redis *redisstore.Store, 
 					rule.ID, rule.Category, rule.Severity, wafMode, "response inspection match", payload)
 			}(clientIP, resp.Request.Method, resp.Request.Host, resp.Request.URL.Path, resp.Request.Header.Get("User-Agent"), result.Rule, result.Payload)
 
-			// CRITICAL FIX: Actively intercept and block the response payload so the stack trace/leak
-			// is not forwarded to the client when the WAF is operating in enforcement mode.
 			if wafMode == "block" {
 				blockMsg := "NetSentinel WAF: Response Blocked Due to Sensitive Data Leakage"
 				resp.StatusCode = http.StatusForbidden
 				resp.Body = io.NopCloser(strings.NewReader(blockMsg))
 				resp.Header.Set("Content-Length", strconv.Itoa(len(blockMsg)))
 				resp.Header.Set("Content-Type", "text/plain; charset=utf-8")
-				resp.Header.Del("Transfer-Encoding") // Clear chunked status since we provide a fixed length
+				resp.Header.Del("Transfer-Encoding")
 			}
 		}
 		return nil
