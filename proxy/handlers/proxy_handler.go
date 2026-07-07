@@ -1,4 +1,72 @@
-import chimiddleware "github.com/go-chi/chi/v5/middleware"
+package handlers
+
+import (
+	"bytes"
+	"context"
+	"io"
+	"log"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"strings"
+	"time"
+
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/isshaan-dhar/NetSentinel/db"
+	"github.com/isshaan-dhar/NetSentinel/engine"
+	"github.com/isshaan-dhar/NetSentinel/metrics"
+	redisstore "github.com/isshaan-dhar/NetSentinel/redis"
+)
+
+// statusWriter wraps the standard http.ResponseWriter to capture the 
+// explicit HTTP status code returned by the upstream target backend.
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+type ProxyHandler struct {
+	proxy   *httputil.ReverseProxy
+	db      *db.Store
+	redis   *redisstore.Store
+	wafMode string
+}
+
+func NewProxyHandler(upstream string, store *db.Store, redis *redisstore.Store, wafMode string) (*ProxyHandler, error) {
+	target, err := url.Parse(upstream)
+	if err != nil {
+		return nil, err
+	}
+	rp := httputil.NewSingleHostReverseProxy(target)
+	rp.ModifyResponse = func(resp *http.Response) error {
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return err
+		}
+		resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+		result := engine.InspectResponse(bodyBytes)
+		if result.Blocked {
+			clientIP := resp.Request.Header.Get("X-Real-IP")
+			if clientIP == "" {
+				clientIP = strings.Split(resp.Request.RemoteAddr, ":")[0]
+			}
+			metrics.AttacksDetected.WithLabelValues(result.Rule.Category, result.Rule.Severity, result.Rule.ID).Inc()
+			go store.WriteAttackLog(context.Background(), clientIP,
+				resp.Request.Method, resp.Request.Host, resp.Request.URL.Path,
+				resp.Request.Header.Get("User-Agent"),
+				result.Rule.ID, result.Rule.Category, result.Rule.Severity,
+				"monitor", "response inspection match", result.Payload)
+		}
+		return nil
+	}
+	return &ProxyHandler{proxy: rp, db: store, redis: redis, wafMode: wafMode}, nil
+}
 
 func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
