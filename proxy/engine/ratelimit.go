@@ -11,9 +11,9 @@ const (
 	RateLimitMax    = 100
 )
 
-func CheckRateLimit(ctx context.Context, redis *redisstore.Store, clientIP string) (bool, int64, error) {
+func CheckRateLimit(ctx context.Context, redis *redisstore.Store, clientIP string, requestID string) (bool, int64, error) {
 	key := "ratelimit:" + clientIP
-	count, err := redis.SlidingWindowCount(ctx, key, RateLimitWindow, RateLimitMax)
+	count, err := redis.SlidingWindowCount(ctx, key, RateLimitWindow, RateLimitMax, requestID)
 	if err != nil {
 		return false, 0, err
 	}
