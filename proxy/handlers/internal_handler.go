@@ -27,7 +27,6 @@ type anomalyNotification struct {
 }
 
 func (h *InternalHandler) RecordAnomaly(w http.ResponseWriter, r *http.Request) {
-	// SECURITY FIX: Reject unauthenticated payloads to prevent WAF weaponization
 	if r.Header.Get("X-Internal-Secret") != h.internalKey {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
