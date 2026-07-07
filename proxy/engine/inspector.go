@@ -45,10 +45,8 @@ func InspectResponse(body []byte) *InspectionResult {
 func collectRequestTargets(r *http.Request) []string {
 	var targets []string
 
-	// Ensure standard unescaped path is inspected
 	targets = append(targets, r.URL.Path)
 
-	// Add RawPath if it contains distinct encoded contents
 	if r.URL.RawPath != "" {
 		targets = append(targets, r.URL.RawPath)
 	}
@@ -72,9 +70,6 @@ func collectRequestTargets(r *http.Request) []string {
 		}
 	}
 
-	// SECURITY & INTEGRITY FIX: Read unconditionally if a body exists, capped at 1MB.
-	// Use io.MultiReader to reconstruct the original stream so large file uploads 
-	// are not silently truncated and corrupted before reaching the backend.
 	if r.Body != nil && r.Body != http.NoBody {
 		bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err == nil {
