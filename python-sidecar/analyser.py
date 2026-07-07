@@ -27,7 +27,9 @@ DB_CONFIG = {
     "password": os.getenv("POSTGRES_PASSWORD"),
 }
 
-PROXY_URL = "http://proxy:8080/internal/anomaly"
+# ARCHITECTURAL FIX: Do not hardcode internal DNS routing
+PROXY_URL = os.getenv("PROXY_URL", "http://proxy:8080/internal/anomaly")
+INTERNAL_SECRET = os.getenv("INTERNAL_API_SECRET", "default-secret")
 ANALYSIS_WINDOW = 300
 MIN_REQUESTS = 5
 
@@ -104,7 +106,7 @@ def build_features(requests_list: list[dict], attacks_list: list[dict]) -> dict[
 
 def notify_proxy(alert: AnomalyAlert):
     try:
-        # ARCHITECTURAL FIX: Inject the target IP so the proxy enforcement loop succeeds
+        # SECURITY FIX: Pass the authentication secret in the header
         requests.post(
             PROXY_URL,
             json={
@@ -112,6 +114,7 @@ def notify_proxy(alert: AnomalyAlert):
                 "severity": alert.severity,
                 "client_ip": alert.client_ip
             },
+            headers={"X-Internal-Secret": INTERNAL_SECRET},
             timeout=2,
         )
     except Exception:
