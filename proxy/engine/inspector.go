@@ -72,7 +72,7 @@ func collectRequestTargets(r *http.Request) []string {
 		}
 	}
 
-	if r.Body != nil && r.ContentLength > 0 && r.ContentLength < 1<<20 {
+	if r.Body != nil && r.Body != http.NoBody {
 		bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err == nil {
 			r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
