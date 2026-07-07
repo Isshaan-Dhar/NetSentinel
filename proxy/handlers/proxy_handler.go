@@ -1,69 +1,4 @@
-package handlers
-
-import (
-	"bytes"
-	"context"
-	"io"
-	"log"
-	"net/http"
-	"net/http/httputil"
-	"net/url"
-	"strings"
-	"time"
-
-	"github.com/isshaan-dhar/NetSentinel/db"
-	"github.com/isshaan-dhar/NetSentinel/engine"
-	"github.com/isshaan-dhar/NetSentinel/metrics"
-	redisstore "github.com/isshaan-dhar/NetSentinel/redis"
-)
-
-type statusWriter struct {
-	http.ResponseWriter
-	status int
-}
-
-func (w *statusWriter) WriteHeader(status int) {
-	w.status = status
-	w.ResponseWriter.WriteHeader(status)
-}
-
-type ProxyHandler struct {
-	proxy   *httputil.ReverseProxy
-	db      *db.Store
-	redis   *redisstore.Store
-	wafMode string
-}
-
-func NewProxyHandler(upstream string, store *db.Store, redis *redisstore.Store, wafMode string) (*ProxyHandler, error) {
-	target, err := url.Parse(upstream)
-	if err != nil {
-		return nil, err
-	}
-	rp := httputil.NewSingleHostReverseProxy(target)
-	rp.ModifyResponse = func(resp *http.Response) error {
-		bodyBytes, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return err
-		}
-		resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-
-		result := engine.InspectResponse(bodyBytes)
-		if result.Blocked {
-			clientIP := resp.Request.Header.Get("X-Real-IP")
-			if clientIP == "" {
-				clientIP = strings.Split(resp.Request.RemoteAddr, ":")[0]
-			}
-			metrics.AttacksDetected.WithLabelValues(result.Rule.Category, result.Rule.Severity, result.Rule.ID).Inc()
-			go store.WriteAttackLog(context.Background(), clientIP,
-				resp.Request.Method, resp.Request.Host, resp.Request.URL.Path,
-				resp.Request.Header.Get("User-Agent"),
-				result.Rule.ID, result.Rule.Category, result.Rule.Severity,
-				"monitor", "response inspection match", result.Payload)
-		}
-		return nil
-	}
-	return &ProxyHandler{proxy: rp, db: store, redis: redis, wafMode: wafMode}, nil
-}
+import chimiddleware "github.com/go-chi/chi/v5/middleware"
 
 func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
@@ -72,9 +7,15 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		clientIP = strings.Split(r.RemoteAddr, ":")[0]
 	}
 
+	// Retrieve unique request identifier for the rate-limiter
+	reqID := chimiddleware.GetReqID(r.Context())
+	if reqID == "" {
+		reqID = "internal-fallback-id"
+	}
+
 	metrics.RequestsTotal.Inc()
 
-	blocked, reason, err := h.db.IsIPBlocklisted(r.Context(), clientIP)
+	blocked, _, err := h.db.IsIPBlocklisted(r.Context(), clientIP)
 	if err != nil {
 		log.Printf("blocklist check error: %v", err)
 	}
@@ -85,7 +26,8 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rateLimited, count, err := engine.CheckRateLimit(r.Context(), h.redis, clientIP)
+	// Forward the tracking request ID down into our sliding window check
+	rateLimited, _, err := engine.CheckRateLimit(r.Context(), h.redis, clientIP, reqID)
 	if err != nil {
 		log.Printf("rate limit error: %v", err)
 	}
@@ -95,8 +37,6 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			r.Header.Get("User-Agent"), "RATELIMIT-001", "RateLimit", "HIGH", h.wafMode,
 			"rate limit exceeded", "")
 		go h.db.WriteRequestStat(context.Background(), clientIP, r.Method, r.URL.Path, 429, float64(time.Since(start).Milliseconds()), true)
-		_ = count
-		_ = reason
 		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
 		return
 	}
@@ -116,6 +56,10 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h.proxy.ServeHTTP(w, r)
-	go h.db.WriteRequestStat(context.Background(), clientIP, r.Method, r.URL.Path, 200, float64(time.Since(start).Milliseconds()), false)
+	// Wrap response interceptor to discover exact status returned by backend upstream
+	sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+	h.proxy.ServeHTTP(sw, r)
+
+	// Record legitimate metrics to database hypertable
+	go h.db.WriteRequestStat(context.Background(), clientIP, r.Method, r.URL.Path, sw.status, float64(time.Since(start).Milliseconds()), false)
 }
