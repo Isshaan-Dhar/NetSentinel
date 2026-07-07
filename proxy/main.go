@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -37,7 +38,7 @@ func main() {
 		log.Fatalf("failed to create proxy handler: %v", err)
 	}
 
-	internalHandler := handlers.NewInternalHandler()
+	internalHandler := handlers.NewInternalHandler(store)
 
 	r := chi.NewRouter()
 	r.Use(chimiddleware.RequestID)
@@ -50,9 +51,20 @@ func main() {
 			start := time.Now()
 			ww := chimiddleware.NewWrapResponseWriter(w, req.ProtoMajor)
 			next.ServeHTTP(ww, req)
+
+			// ARCHITECTURAL FIX: Bounded Prometheus cardinality.
+			// Replaces the raw path with the root directory segment.
+			routeLabel := "root"
+			if req.URL.Path != "/" {
+				parts := strings.Split(req.URL.Path, "/")
+				if len(parts) > 1 && parts[1] != "" {
+					routeLabel = "/" + parts[1]
+				}
+			}
+
 			metrics.RequestDuration.With(prometheus.Labels{
 				"method": req.Method,
-				"route":  req.URL.Path,
+				"route":  routeLabel,
 				"status": strconv.Itoa(ww.Status()),
 			}).Observe(time.Since(start).Seconds())
 		})
@@ -66,7 +78,6 @@ func main() {
 	r.Post("/internal/anomaly", internalHandler.RecordAnomaly)
 	r.Mount("/", proxyHandler)
 
-	// SECURITY FIX: Explicit HTTP server configuration to mitigate Slowloris / stalled connections
 	srv := &http.Server{
 		Addr:              ":" + cfg.AppPort,
 		Handler:           r,
