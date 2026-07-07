@@ -38,7 +38,6 @@ def get_connection():
 
 def fetch_window(conn) -> list[dict]:
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        # Fixed parameter syntax conflict by computing mathematical intervals safely outside quotes
         cur.execute(
             """
             SELECT client_ip, method, path, user_agent, status_code, duration_ms, blocked, occurred_at
@@ -53,7 +52,6 @@ def fetch_window(conn) -> list[dict]:
 
 def fetch_attacks(conn) -> list[dict]:
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        # Fixed parameter syntax conflict by computing mathematical intervals safely outside quotes
         cur.execute(
             """
             SELECT client_ip, category, severity
@@ -106,9 +104,14 @@ def build_features(requests_list: list[dict], attacks_list: list[dict]) -> dict[
 
 def notify_proxy(alert: AnomalyAlert):
     try:
+        # ARCHITECTURAL FIX: Inject the target IP so the proxy enforcement loop succeeds
         requests.post(
             PROXY_URL,
-            json={"anomaly_type": alert.anomaly_type, "severity": alert.severity},
+            json={
+                "anomaly_type": alert.anomaly_type,
+                "severity": alert.severity,
+                "client_ip": alert.client_ip
+            },
             timeout=2,
         )
     except Exception:
