@@ -45,7 +45,14 @@ func InspectResponse(body []byte) *InspectionResult {
 func collectRequestTargets(r *http.Request) []string {
 	var targets []string
 
-	targets = append(targets, r.URL.RawPath)
+	// Ensure standard unescaped path is inspected
+	targets = append(targets, r.URL.Path)
+	
+	// Add RawPath if it contains distinct encoded contents
+	if r.URL.RawPath != "" {
+		targets = append(targets, r.URL.RawPath)
+	}
+	
 	targets = append(targets, r.URL.RawQuery)
 
 	decoded, err := url.QueryUnescape(r.URL.RawQuery)
@@ -75,7 +82,6 @@ func collectRequestTargets(r *http.Request) []string {
 
 	return targets
 }
-
 func truncate(s string, max int) string {
 	s = strings.TrimSpace(s)
 	if len(s) > max {
