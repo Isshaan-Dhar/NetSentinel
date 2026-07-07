@@ -17,6 +17,16 @@ import (
 	redisstore "github.com/isshaan-dhar/NetSentinel/redis"
 )
 
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
 type ProxyHandler struct {
 	proxy   *httputil.ReverseProxy
 	db      *db.Store
