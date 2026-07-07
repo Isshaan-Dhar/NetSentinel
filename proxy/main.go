@@ -66,8 +66,18 @@ func main() {
 	r.Post("/internal/anomaly", internalHandler.RecordAnomaly)
 	r.Mount("/", proxyHandler)
 
+	// SECURITY FIX: Explicit HTTP server configuration to mitigate Slowloris / stalled connections
+	srv := &http.Server{
+		Addr:              ":" + cfg.AppPort,
+		Handler:           r,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
 	log.Printf("NetSentinel proxy starting on :%s in %s mode", cfg.AppPort, cfg.WAFMode)
-	if err := http.ListenAndServe(":"+cfg.AppPort, r); err != nil {
+	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
 }
