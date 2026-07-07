@@ -47,12 +47,12 @@ func collectRequestTargets(r *http.Request) []string {
 
 	// Ensure standard unescaped path is inspected
 	targets = append(targets, r.URL.Path)
-	
+
 	// Add RawPath if it contains distinct encoded contents
 	if r.URL.RawPath != "" {
 		targets = append(targets, r.URL.RawPath)
 	}
-	
+
 	targets = append(targets, r.URL.RawQuery)
 
 	decoded, err := url.QueryUnescape(r.URL.RawQuery)
@@ -72,6 +72,8 @@ func collectRequestTargets(r *http.Request) []string {
 		}
 	}
 
+	// SECURITY FIX: Do not rely on r.ContentLength > 0, which fails on Chunked Transfer-Encoding.
+	// We read unconditionally if a body exists, capped at 1MB to prevent memory exhaustion.
 	if r.Body != nil && r.Body != http.NoBody {
 		bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err == nil {
@@ -82,6 +84,7 @@ func collectRequestTargets(r *http.Request) []string {
 
 	return targets
 }
+
 func truncate(s string, max int) string {
 	s = strings.TrimSpace(s)
 	if len(s) > max {
