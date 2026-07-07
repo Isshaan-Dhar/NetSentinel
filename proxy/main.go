@@ -38,7 +38,6 @@ func main() {
 		log.Fatalf("failed to create proxy handler: %v", err)
 	}
 
-	// SECURITY FIX: Inject the secret into the internal handler instance
 	internalHandler := handlers.NewInternalHandler(store, cfg.InternalSecret)
 
 	r := chi.NewRouter()
