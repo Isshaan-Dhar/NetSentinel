@@ -38,7 +38,8 @@ func main() {
 		log.Fatalf("failed to create proxy handler: %v", err)
 	}
 
-	internalHandler := handlers.NewInternalHandler(store)
+	// SECURITY FIX: Inject the secret into the internal handler instance
+	internalHandler := handlers.NewInternalHandler(store, cfg.InternalSecret)
 
 	r := chi.NewRouter()
 	r.Use(chimiddleware.RequestID)
@@ -52,8 +53,6 @@ func main() {
 			ww := chimiddleware.NewWrapResponseWriter(w, req.ProtoMajor)
 			next.ServeHTTP(ww, req)
 
-			// ARCHITECTURAL FIX: Bounded Prometheus cardinality.
-			// Replaces the raw path with the root directory segment.
 			routeLabel := "root"
 			if req.URL.Path != "/" {
 				parts := strings.Split(req.URL.Path, "/")
