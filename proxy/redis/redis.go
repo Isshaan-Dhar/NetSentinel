@@ -26,13 +26,16 @@ func (s *Store) Close() error {
 	return s.client.Close()
 }
 
-func (s *Store) SlidingWindowCount(ctx context.Context, key string, windowSeconds int, maxRequests int64) (int64, error) {
+func (s *Store) SlidingWindowCount(ctx context.Context, key string, windowSeconds int, maxRequests int64, requestID string) (int64, error) {
 	now := time.Now().UnixMilli()
 	windowStart := now - int64(windowSeconds)*1000
 
+	// Create a completely unique member name for this millisecond window slice
+	member := strconv.FormatInt(now, 10) + ":" + requestID
+
 	pipe := s.client.Pipeline()
 	pipe.ZRemRangeByScore(ctx, key, "0", strconv.FormatInt(windowStart, 10))
-	pipe.ZAdd(ctx, key, redis.Z{Score: float64(now), Member: now})
+	pipe.ZAdd(ctx, key, redis.Z{Score: float64(now), Member: member})
 	pipe.ZCard(ctx, key)
 	pipe.Expire(ctx, key, time.Duration(windowSeconds)*time.Second)
 
