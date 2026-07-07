@@ -30,7 +30,6 @@ func (s *Store) SlidingWindowCount(ctx context.Context, key string, windowSecond
 	now := time.Now().UnixMilli()
 	windowStart := now - int64(windowSeconds)*1000
 
-	// Create a completely unique member name for this millisecond window slice
 	member := strconv.FormatInt(now, 10) + ":" + requestID
 
 	pipe := s.client.Pipeline()
