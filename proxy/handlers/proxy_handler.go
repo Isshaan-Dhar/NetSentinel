@@ -18,8 +18,6 @@ import (
 	redisstore "github.com/isshaan-dhar/NetSentinel/redis"
 )
 
-// statusWriter wraps the standard http.ResponseWriter to capture the
-// explicit HTTP status code returned by the upstream target backend.
 type statusWriter struct {
 	http.ResponseWriter
 	status int
@@ -28,6 +26,14 @@ type statusWriter struct {
 func (w *statusWriter) WriteHeader(status int) {
 	w.status = status
 	w.ResponseWriter.WriteHeader(status)
+}
+
+// ARCHITECTURAL FIX: Implements http.Flusher to prevent breaking SSE,
+// WebSockets, and chunked video/data streams.
+func (w *statusWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 type ProxyHandler struct {
@@ -44,7 +50,6 @@ func NewProxyHandler(upstream string, store *db.Store, redis *redisstore.Store, 
 	}
 	rp := httputil.NewSingleHostReverseProxy(target)
 	rp.ModifyResponse = func(resp *http.Response) error {
-		// SECURITY FIX: Skip inspection for non-text streams (binaries, videos) to prevent proxy RAM exhaustion
 		contentType := resp.Header.Get("Content-Type")
 		if contentType != "" &&
 			!strings.Contains(contentType, "text/") &&
@@ -53,7 +58,6 @@ func NewProxyHandler(upstream string, store *db.Store, redis *redisstore.Store, 
 			return nil
 		}
 
-		// SECURITY FIX: Cap response read size at 2MB using LimitReader
 		bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 		if err != nil {
 			return err
@@ -68,7 +72,6 @@ func NewProxyHandler(upstream string, store *db.Store, redis *redisstore.Store, 
 			}
 			metrics.AttacksDetected.WithLabelValues(result.Rule.Category, result.Rule.Severity, result.Rule.ID).Inc()
 
-			// SECURITY FIX: Enforce context timeouts on background go-routines
 			go func(ip, method, host, path, ua string, rule *engine.Rule, payload string) {
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				defer cancel()
@@ -88,7 +91,6 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		clientIP = strings.Split(r.RemoteAddr, ":")[0]
 	}
 
-	// Retrieve unique request identifier for the rate-limiter
 	reqID := chimiddleware.GetReqID(r.Context())
 	if reqID == "" {
 		reqID = "internal-fallback-id"
@@ -111,7 +113,6 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Forward the tracking request ID down into our sliding window check
 	rateLimited, _, err := engine.CheckRateLimit(r.Context(), h.redis, clientIP, reqID)
 	if err != nil {
 		log.Printf("rate limit error: %v", err)
@@ -131,7 +132,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	result := engine.InspectRequest(r)
 	if result.Blocked {
 		metrics.AttacksDetected.WithLabelValues(result.Rule.Category, result.Rule.Severity, result.Rule.ID).Inc()
-		
+
 		go func(ip, method, host, path, ua string, rule *engine.Rule, payload string, dur float64) {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
@@ -148,11 +149,9 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Wrap response interceptor to discover exact status returned by backend upstream
 	sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 	h.proxy.ServeHTTP(sw, r)
 
-	// Record legitimate metrics to database hypertable with context timeout
 	go func(ip, method, path string, status int, dur float64) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
