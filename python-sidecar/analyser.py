@@ -27,7 +27,6 @@ DB_CONFIG = {
     "password": os.getenv("POSTGRES_PASSWORD"),
 }
 
-# ARCHITECTURAL FIX: Do not hardcode internal DNS routing
 PROXY_URL = os.getenv("PROXY_URL", "http://proxy:8080/internal/anomaly")
 INTERNAL_SECRET = os.getenv("INTERNAL_API_SECRET", "default-secret")
 ANALYSIS_WINDOW = 300
@@ -106,7 +105,6 @@ def build_features(requests_list: list[dict], attacks_list: list[dict]) -> dict[
 
 def notify_proxy(alert: AnomalyAlert):
     try:
-        # SECURITY FIX: Pass the authentication secret in the header
         requests.post(
             PROXY_URL,
             json={
