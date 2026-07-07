@@ -18,7 +18,7 @@ import (
 	redisstore "github.com/isshaan-dhar/NetSentinel/redis"
 )
 
-// statusWriter wraps the standard http.ResponseWriter to capture the 
+// statusWriter wraps the standard http.ResponseWriter to capture the
 // explicit HTTP status code returned by the upstream target backend.
 type statusWriter struct {
 	http.ResponseWriter
@@ -44,7 +44,17 @@ func NewProxyHandler(upstream string, store *db.Store, redis *redisstore.Store, 
 	}
 	rp := httputil.NewSingleHostReverseProxy(target)
 	rp.ModifyResponse = func(resp *http.Response) error {
-		bodyBytes, err := io.ReadAll(resp.Body)
+		// SECURITY FIX: Skip inspection for non-text streams (binaries, videos) to prevent proxy RAM exhaustion
+		contentType := resp.Header.Get("Content-Type")
+		if contentType != "" &&
+			!strings.Contains(contentType, "text/") &&
+			!strings.Contains(contentType, "application/json") &&
+			!strings.Contains(contentType, "application/xml") {
+			return nil
+		}
+
+		// SECURITY FIX: Cap response read size at 2MB using LimitReader
+		bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 		if err != nil {
 			return err
 		}
@@ -57,11 +67,14 @@ func NewProxyHandler(upstream string, store *db.Store, redis *redisstore.Store, 
 				clientIP = strings.Split(resp.Request.RemoteAddr, ":")[0]
 			}
 			metrics.AttacksDetected.WithLabelValues(result.Rule.Category, result.Rule.Severity, result.Rule.ID).Inc()
-			go store.WriteAttackLog(context.Background(), clientIP,
-				resp.Request.Method, resp.Request.Host, resp.Request.URL.Path,
-				resp.Request.Header.Get("User-Agent"),
-				result.Rule.ID, result.Rule.Category, result.Rule.Severity,
-				"monitor", "response inspection match", result.Payload)
+
+			// SECURITY FIX: Enforce context timeouts on background go-routines
+			go func(ip, method, host, path, ua string, rule *engine.Rule, payload string) {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				store.WriteAttackLog(ctx, ip, method, host, path, ua,
+					rule.ID, rule.Category, rule.Severity, "monitor", "response inspection match", payload)
+			}(clientIP, resp.Request.Method, resp.Request.Host, resp.Request.URL.Path, resp.Request.Header.Get("User-Agent"), result.Rule, result.Payload)
 		}
 		return nil
 	}
@@ -89,7 +102,11 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if blocked {
 		metrics.RequestsBlocked.Inc()
-		go h.db.WriteRequestStat(context.Background(), clientIP, r.Method, r.URL.Path, 403, float64(time.Since(start).Milliseconds()), true)
+		go func(ip, method, path string, dur float64) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			h.db.WriteRequestStat(ctx, ip, method, path, 403, dur, true)
+		}(clientIP, r.Method, r.URL.Path, float64(time.Since(start).Milliseconds()))
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
@@ -101,10 +118,12 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if rateLimited {
 		metrics.RequestsBlocked.Inc()
-		go h.db.WriteAttackLog(context.Background(), clientIP, r.Method, r.Host, r.URL.Path,
-			r.Header.Get("User-Agent"), "RATELIMIT-001", "RateLimit", "HIGH", h.wafMode,
-			"rate limit exceeded", "")
-		go h.db.WriteRequestStat(context.Background(), clientIP, r.Method, r.URL.Path, 429, float64(time.Since(start).Milliseconds()), true)
+		go func(ip, method, host, path, ua string, dur float64) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			h.db.WriteAttackLog(ctx, ip, method, host, path, ua, "RATELIMIT-001", "RateLimit", "HIGH", h.wafMode, "rate limit exceeded", "")
+			h.db.WriteRequestStat(ctx, ip, method, path, 429, dur, true)
+		}(clientIP, r.Method, r.Host, r.URL.Path, r.Header.Get("User-Agent"), float64(time.Since(start).Milliseconds()))
 		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
 		return
 	}
@@ -112,13 +131,18 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	result := engine.InspectRequest(r)
 	if result.Blocked {
 		metrics.AttacksDetected.WithLabelValues(result.Rule.Category, result.Rule.Severity, result.Rule.ID).Inc()
-		go h.db.WriteAttackLog(context.Background(), clientIP, r.Method, r.Host, r.URL.Path,
-			r.Header.Get("User-Agent"), result.Rule.ID, result.Rule.Category, result.Rule.Severity,
-			h.wafMode, "request inspection match", result.Payload)
+		
+		go func(ip, method, host, path, ua string, rule *engine.Rule, payload string, dur float64) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			h.db.WriteAttackLog(ctx, ip, method, host, path, ua, rule.ID, rule.Category, rule.Severity, h.wafMode, "request inspection match", payload)
+			if h.wafMode == "block" {
+				h.db.WriteRequestStat(ctx, ip, method, path, 403, dur, true)
+			}
+		}(clientIP, r.Method, r.Host, r.URL.Path, r.Header.Get("User-Agent"), result.Rule, result.Payload, float64(time.Since(start).Milliseconds()))
 
 		if h.wafMode == "block" {
 			metrics.RequestsBlocked.Inc()
-			go h.db.WriteRequestStat(context.Background(), clientIP, r.Method, r.URL.Path, 403, float64(time.Since(start).Milliseconds()), true)
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
@@ -128,6 +152,10 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 	h.proxy.ServeHTTP(sw, r)
 
-	// Record legitimate metrics to database hypertable
-	go h.db.WriteRequestStat(context.Background(), clientIP, r.Method, r.URL.Path, sw.status, float64(time.Since(start).Milliseconds()), false)
+	// Record legitimate metrics to database hypertable with context timeout
+	go func(ip, method, path string, status int, dur float64) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		h.db.WriteRequestStat(ctx, ip, method, path, status, dur, false)
+	}(clientIP, r.Method, r.URL.Path, sw.status, float64(time.Since(start).Milliseconds()))
 }
