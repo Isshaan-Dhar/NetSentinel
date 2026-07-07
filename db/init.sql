@@ -43,3 +43,7 @@ CREATE TABLE IF NOT EXISTS request_stats (
 SELECT create_hypertable('request_stats', 'occurred_at', if_not_exists => TRUE);
 
 CREATE INDEX IF NOT EXISTS idx_request_stats_client_ip ON request_stats (client_ip, occurred_at DESC);
+
+-- ARCHITECTURAL FIX: Setup data retention policies to prevent disk space exhaustion.
+SELECT add_retention_policy('attack_log', INTERVAL '30 days');
+SELECT add_retention_policy('request_stats', INTERVAL '7 days');
